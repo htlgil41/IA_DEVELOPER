@@ -42,8 +42,12 @@ func main() {
 
 	msg, err_client := client.Messages.New(context.TODO(), anthropic.MessageNewParams{
 		Model:     anthropic.ModelClaudeFable5,
-		MaxTokens: 1024,
+		MaxTokens: 4000,
 		Tools:     tools,
+		System: []anthropic.TextBlockParam{
+			{Text: "INSTRUCCIONES DEL PROMPT SISTEMA PARA LA IA"},
+		},
+		Thinking: anthropic.ThinkingConfigParamOfEnabled(1024),
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock("Resumen esto en una linea")),
 		},
@@ -211,6 +215,114 @@ func loop_ai_strem() {
 			if e, ok := evento.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
 				if d, ok := e.Delta.AsAny().(anthropic.TextDelta); ok {
 					fmt.Print(d.Text) // Usamos Print para que el texto fluya sin saltos de línea forzados
+				}
+			}
+		}
+
+		if stream.Err() != nil {
+			fmt.Printf("Error en el stream: %v\n", stream.Err())
+			return
+		}
+
+		// Salto de línea estético al terminar de escribir el bloque de texto
+		fmt.Println()
+
+		// 1. Guardamos la respuesta completa ya acumulada en el historial
+		messages = append(messages, msg.ToParam())
+
+		// 2. Procesamos si Claude decidió invocar alguna herramienta
+		var resultados []anthropic.ContentBlockParamUnion
+		for _, b := range msg.Content {
+			if uso, ok := b.AsAny().(anthropic.ToolUseBlock); ok {
+				fmt.Printf("\n[Agente] Claude quiere usar la herramienta: %s\n", uso.Name)
+
+				// Ejecutamos tu función de negocio local
+				salida, fallo := ejecutarFuncion(uso.Name, uso.JSON.Input.Raw())
+
+				// Empaquetamos el resultado usando el ID único provisto por Claude
+				toolResultBlock := anthropic.NewToolResultBlock(uso.ID, salida, fallo)
+				resultados = append(resultados, toolResultBlock)
+			}
+		}
+
+		// 3. Condición de salida: Si Claude no pidió ninguna herramienta, la tarea terminó
+		if len(resultados) == 0 {
+			break
+		}
+
+		// 4. Si hubo herramientas, enviamos los resultados de vuelta en un único mensaje de usuario
+		messages = append(messages, anthropic.NewUserMessage(resultados...))
+	}
+}
+
+func loop_ai_strem_thinkin() {
+	messages := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("Resumen esto en una linea")),
+	}
+
+	client := anthropic.NewClient(option.WithAPIKey(".."))
+	var toolsDefine = []anthropic.ToolParam{
+		{
+			Name:        "buscar_algo",
+			Description: anthropic.String("Esta funcion busca algo en internet algun recurso. Solo ejecutala cuando quieras buscar algun titulo en internet o algun link o url. Devuelve el html de la url pasada por parametros"),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: map[string]any{
+					"url": map[string]any{
+						"type":        "string",
+						"description": "is a url",
+					},
+				},
+				Required: []string{"url"},
+			},
+		},
+	}
+
+	toolUnion := make([]anthropic.ToolUnionParam, len(toolsDefine))
+	for i, p := range toolsDefine {
+		toolUnion[i] = anthropic.ToolUnionParam{
+			OfTool: &p,
+		}
+	}
+
+	for {
+		// Iniciamos el stream
+		stream := client.Messages.NewStreaming(
+			context.Background(),
+			anthropic.MessageNewParams{
+				Model:     anthropic.ModelClaudeFable5,
+				MaxTokens: 4000,
+				Thinking:  anthropic.ThinkingConfigParamOfEnabled(1024),
+				Messages:  messages,
+				Tools:     toolUnion,
+			},
+		)
+
+		var msg anthropic.Message
+
+		// Consumimos el stream evento por evento
+		for stream.Next() {
+			evento := stream.Current()
+
+			// Acumula los datos para construir el mensaje completo en segundo plano
+			errAcumulate := msg.Accumulate(evento)
+			if errAcumulate != nil {
+				fmt.Printf("Error al acumular evento: %v\n", errAcumulate)
+				return
+			}
+
+			// Mostramos el texto en tiempo real al usuario conforme va llegando
+			if e, ok := evento.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
+				switch delta := e.Delta.AsAny().(type) {
+				case anthropic.TextDelta:
+					{
+						fmt.Print(delta.Text)
+					}
+
+				case anthropic.ThinkingDelta:
+					{
+						// Opcional: Puedes mostrar el pensamiento interno en tiempo real
+						// fmt.Printf("[Pensando...]: %s\n", delta.Thinking)
+					}
 				}
 			}
 		}
