@@ -3,7 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
+	"net/http"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -54,6 +58,28 @@ func main() {
 	})
 
 	if err_client != nil {
+		var apiError *anthropic.Error
+		if errors.As(err_client, apiError) {
+			// Identificador de peticion  es lo primero que va a pedir un soporte
+			log.Printf("API %d (request id)", apiError.StatusCode, apiError.RequestID)
+			switch apiError.StatusCode {
+			case 400:
+				{
+					panic(fmt.Errorf("Error de conexion en el mdelo")) // No se reintenta
+				}
+
+			case 429, 500, 529:
+				{
+					// El sdk ya intenta dos veces
+				}
+			}
+		}
+
+		/*
+				Y LOS DOS LIMITES DEL BUCLE QUE TIEES QUE PONER TU:
+			- UN MAXIMO DE VUELTAS SINO, UN AGENTE CONFUNDIDO MIRA PARA SIEMPRE
+			- UN CONTEXT TIMEOUT, BUCLE INTERNO CADA LLAMADA
+		*/
 		panic(err_client)
 	}
 
@@ -359,6 +385,176 @@ func loop_ai_strem_thinkin() {
 		}
 
 		// 4. Si hubo herramientas, enviamos los resultados de vuelta en un único mensaje de usuario
+		messages = append(messages, anthropic.NewUserMessage(resultados...))
+	}
+}
+
+func loop_ai_strem_thinkin_with_rules() {
+	// 1. Cliente HTTP personalizado con timeout estricto para evitar bloqueos de red
+	httpClient := &http.Client{
+		Timeout: 60 * time.Second,
+	}
+
+	client := anthropic.NewClient(
+		option.WithAPIKey("TU_API_KEY"),
+		option.WithHTTPClient(httpClient),
+	)
+
+	// 2. Historial de mensajes inicial
+	messages := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("Busca la información necesaria en la web y haz un resumen claro.")),
+	}
+
+	// 3. Definición robusta de herramientas con descripciones detalladas y parámetros requeridos
+	toolsDefine := []anthropic.ToolParam{
+		{
+			Name: "buscar_algo",
+			Description: anthropic.String(
+				"Busca un recurso o link en internet. " +
+					"Úsala únicamente cuando necesites información externa o un recurso web específico. " +
+					"Devuelve el contenido HTML o simulado de la URL solicitada.",
+			),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: map[string]any{
+					"url": map[string]any{
+						"type":        "string",
+						"description": "URL completa y válida, por ejemplo: https://www.ejemplo.com",
+					},
+				},
+				Required: []string{"url"},
+			},
+		},
+	}
+
+	toolUnion := make([]anthropic.ToolUnionParam, len(toolsDefine))
+	for i, p := range toolsDefine {
+		toolUnion[i] = anthropic.ToolUnionParam{OfTool: &p}
+	}
+
+	// 4. LÍMITE DE SEGURIDAD: Control de iteraciones máximas para evitar bucles infinitos
+	maxIterations := 5
+	currentIteration := 0
+
+	for {
+		currentIteration++
+		if currentIteration > maxIterations {
+			fmt.Printf("\n[Seguridad del Agente] Límite máximo de %d iteraciones alcanzado. Notificando al modelo para cierre elegante...\n", maxIterations)
+
+			// 1. Inyectamos un mensaje final informándole al modelo que se quedó sin turnos
+			messages = append(messages, anthropic.NewUserMessage(
+				anthropic.NewTextBlock("Has alcanzado el límite máximo de iteraciones permitidas. Por favor, no ejecutes más herramientas, haz un breve resumen de lo que lograste hasta ahora y explícale amablemente al usuario que no pudiste completar la tarea por completo."),
+			))
+
+			// 2. Hacemos una última llamada rápida (sin herramientas) para que Claude cierre la conversación
+			finalStream := client.Messages.NewStreaming(
+				context.Background(),
+				anthropic.MessageNewParams{
+					Model:     anthropic.ModelClaudeFable5,
+					MaxTokens: 1024,
+					Messages:  messages,
+					// Ya no le pasamos herramientas (Tools) para forzarlo a responder en texto
+				},
+			)
+
+			var finalMsg anthropic.Message
+			for finalStream.Next() {
+				evento := finalStream.Current()
+				finalMsg.Accumulate(evento)
+				if e, ok := evento.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
+					if delta, ok := e.Delta.AsAny().(anthropic.TextDelta); ok {
+						fmt.Print(delta.Text)
+					}
+				}
+			}
+			fmt.Println()
+			break // Ahora sí, salimos del bucle de forma limpia
+		}
+
+		// 5. Configuración de la petición con Streaming, System Prompt y Thinking Activado
+		stream := client.Messages.NewStreaming(
+			context.Background(),
+			anthropic.MessageNewParams{
+				Model:     anthropic.ModelClaudeFable5,
+				MaxTokens: 4000, // Requerido para dar suficiente espacio al presupuesto de thinking
+				Messages:  messages,
+				Tools:     toolUnion,
+				// System Prompt: La constitución o reglas de comportamiento del agente
+				System: []anthropic.TextBlockParam{
+					{
+						Text: "Eres un agente autónomo experto en backend y análisis de datos. " +
+							"Sigue estrictamente estas reglas:\n" +
+							"1. Analiza cuidadosamente la solicitud antes de actuar.\n" +
+							"2. Si requieres datos externos, invoca las herramientas disponibles de forma precisa.\n" +
+							"3. Si una herramienta devuelve un error, lee el reporte y reintenta corrigiendo los parámetros o informa al usuario.\n" +
+							"4. Nunca inventes información si una herramienta falla de forma crítica.",
+					},
+				},
+				// Razonamiento Extendido (Thinking)
+				Thinking: anthropic.ThinkingConfigParamOfEnabled(1024),
+			},
+		)
+
+		var msg anthropic.Message
+
+		// Consumo del Stream evento por evento
+		for stream.Next() {
+			evento := stream.Current()
+
+			// Acumulación en segundo plano del mensaje completo
+			if errAcumulate := msg.Accumulate(evento); errAcumulate != nil {
+				fmt.Printf("Error al acumular evento del stream: %v\n", errAcumulate)
+				return
+			}
+
+			// Impresión en tiempo real del texto visible para el usuario
+			if e, ok := evento.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
+				if delta, ok := e.Delta.AsAny().(anthropic.TextDelta); ok {
+					fmt.Print(delta.Text)
+				}
+
+				if _, ok := e.Delta.AsAny().(anthropic.ThinkingDelta); ok {
+					fmt.Print("Pensando dame un momento")
+				}
+				// Aca podriamos impromir el razonamiento
+			}
+		}
+
+		if stream.Err() != nil {
+			fmt.Printf("Error crítico en el stream: %v\n", stream.Err())
+			return
+		}
+
+		fmt.Println() // Salto de línea estético al terminar el bloque de texto
+
+		// 6. Historial: Guardamos la respuesta completa del asistente
+		messages = append(messages, msg.ToParam())
+
+		// 7. Procesamiento de bloques especiales (Thinking y ToolUse)
+		var resultados []anthropic.ContentBlockParamUnion
+		for _, b := range msg.Content {
+			switch block := b.AsAny().(type) {
+			case anthropic.ThinkingBlock:
+				fmt.Printf("\n[Razonamiento interno completado]: %s\n", block.Thinking)
+
+			case anthropic.ToolUseBlock:
+				fmt.Printf("\n[Agente] Ejecutando herramienta: %s (ID: %s)\n", block.Name, block.ID)
+
+				// Ejecución segura de la función con manejo de errores y validaciones
+				salida, fallo := ejecutarFuncion(block.Name, block.JSON.Input.Raw())
+
+				// Empaquetado robusto atado al ID único de Claude
+				toolResultBlock := anthropic.NewToolResultBlock(block.ID, salida, fallo)
+				resultados = append(resultados, toolResultBlock)
+			}
+		}
+
+		// 8. Condición de salida natural: Si Claude no solicitó ninguna herramienta, el trabajo concluyó
+		if len(resultados) == 0 {
+			fmt.Println("\n[Agente] Tarea finalizada exitosamente.")
+			break
+		}
+
+		// 9. Envío de resultados de herramientas en un único mensaje agrupado de usuario
 		messages = append(messages, anthropic.NewUserMessage(resultados...))
 	}
 }
