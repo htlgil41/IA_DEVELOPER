@@ -73,3 +73,32 @@ func main_mcp_with_http() {
 		log.Fatal(err)
 	}
 }
+
+func main_mcp_with_http_middleware_auth() {
+	server := mcp.NewServer(&mcp.Implementation{Name: "greeter", Version: "v1.0.0"}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "greet", Description: "say hi"}, SayHi)
+
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+		return server
+	}, nil)
+
+	// Middleware global de autenticación
+	authMiddleware := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := r.Header.Get("Authorization")
+
+			if token != "Bearer mi-token-secreto" {
+				// Rechaza toda la petición HTTP de inmediato
+				http.Error(w, "No autorizado", http.StatusUnauthorized)
+				return
+			}
+
+			// Si pasa, continúa hacia el servidor MCP
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	log.Println("Servidor corriendo en http://localhost:8080")
+	// Envuelves el handler de MCP con tu middleware
+	http.ListenAndServe(":8080", authMiddleware(mcpHandler))
+}
