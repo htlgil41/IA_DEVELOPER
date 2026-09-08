@@ -1,3 +1,4 @@
+
 # IA Developer
 
 ![Portada](./portada.jpeg)
@@ -19,3 +20,7 @@ Link: **[https://www.youtube.com/watch?v=4UxCZO8bsuE](https://www.youtube.com/wa
 path: /que_es_un_mcp_primer_servidor_mcp_golang
 
 Servidor basico MCP para decir hola a una persona mediante dos input Nombre Apellido testeado y probado con **@modelcontextprotocol/inspector**
+
+**#3 megamente_agent**
+
+Es un bucle super super basico para inyectar Prompts a un modelo de google que responde segun  lo enviado. es super basico algo de esto.
