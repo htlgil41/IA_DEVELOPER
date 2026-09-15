@@ -1,3 +1,4 @@
 cloudflared:
   account: "ACCOUNT_CLOUDFLARE_ID"
   apikey: "API_TOKEN_ACCESS_ID_CLOUDFLARED"
+  modelo: "@_MODELO_PROVE_CLOUDFLARE"
