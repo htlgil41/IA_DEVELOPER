@@ -13,6 +13,7 @@ type Config struct {
 type CloudflaredConfig struct {
 	Account string `mapstructure:"account"`
 	APIKey  string `mapstructure:"apikey"`
+	Modelo  string `mapstructure:"modelo"`
 }
 
 func LoadConfigVyper() *Config {

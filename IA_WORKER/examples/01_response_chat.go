@@ -27,7 +27,7 @@ func ResponseChat(config *libs.Config) {
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			openai.UserMessage(question),
 		},
-		Model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+		Model: config.Cloudflared.Modelo,
 	})
 
 	if err != nil {
