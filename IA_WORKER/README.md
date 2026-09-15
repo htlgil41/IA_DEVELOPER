@@ -195,9 +195,11 @@ type ImageItem struct {
 ---
 
 ## Function Calling
+
 Function Calling permite que el modelo devuelva llamadas a funciones con argumentos validados para que tu backend las ejecute. Por otro lado, Structured Outputs exige al modelo responder obligatoriamente bajo un formato JSON estricto (Strict: true) definido por un esquema.
 
 ### Function Calling (Invocaciones de funciones)
+
 El flujo se divide en 3 fases: definición de la función en la petición, recepción e interpretación del ToolCall enviado por el modelo, y devolución del resultado al historial de conversación.
 
 ```go
@@ -396,6 +398,7 @@ func main() {
 ```
 
 ### Puntos clave del SDK openai-go
+
 - `additionalProperties: false`: Es obligatorio declarar este parámetro en el JSON Schema para todos los objetos cuando `Strict: true` está activado; de lo contrario, la API devolverá un error 400.
 - Casteo de Uniones: En Go, para pasar opciones complejas como `ResponseFormat`, se utiliza la sintaxis con tipo explícito en el wrapper genérico: `openai.F[openai.ChatCompletionNewParamsResponseFormatUnion](...)`.
 - Manejo de Errores de Refusal: Cuando se usan Structured Outputs, si el prompt viola políticas de seguridad, el modelo puede declinar la generación en lugar de violar el esquema. Para verificar esto en producción, se revisa la propiedad `resp.Choices[0].Message.Refusal`.
@@ -655,3 +658,50 @@ func runAgenticLoop(ctx context.Context, client *openai.Client, userPrompt strin
 - **Orden Estricto del Historial**: La API de OpenAI exige que inmediatamente después de un mensaje de rol `assistant` que contenga `tool_calls`, vengan los mensajes de rol `tool` (`openai.ToolMessage`) haciendo match exacto con los `toolCall.ID`.
 - **Manejo de Errores Silenciosos**: Si el modelo recibe `ERROR_TOOL_EXECUTION: TIMEOUT...`, no se romperá el programa en Go. En la siguiente iteración el modelo dirá algo como: *"Intenté consultar el sistema pero la herramienta no respondió a tiempo. ¿Deseas que reintente?"*.
 - **Control de Costos**: Al pasar `ToolChoiceOptionNone` en el último turno, aseguras que el flujo finalice siempre devolviendo una respuesta textual en lugar de quedar atrapado consumiendo tokens en un ciclo infinito.
+
+## Propiedades del cliente para (Chat.Completions.new)
+
+Tanto para la funcion sincrona/asincrona las propiedades con su definicion uso son:
+
+
+### Control de Generación y Tokens
+
+#### Parámetros de control de generación
+
+- **`MaxCompletionTokens`** (`param.Opt[int64]`): Límite máximo de tokens que el modelo puede generar. Incluye tanto la respuesta visible como los tokens de razonamiento en modelos de la serie o. Reemplaza al campo obsoleto `MaxTokens`.
+- **`MaxTokens`** (`param.Opt[int64]`): **[Deprecado]** Límite anterior de tokens de salida. No es compatible con modelos de la serie o.
+- **`Temperature`** (`param.Opt[float64]`): Ajusta la aleatoriedad de la respuesta (entre 0.0 y 2.0). Valores bajos (0.2) producen respuestas precisas y deterministas; valores altos (0.8) incrementan la creatividad.
+- **`TopP`** (`param.Opt[float64]`): Muestreo por núcleo (Nucleus sampling). Por ejemplo, 0.1 evalúa solo los tokens que concentran el 10% de la masa de probabilidad. Se recomienda modificar `Temperature` o `TopP`, pero no ambos.
+- **`ReasoningEffort`** (`shared.ReasoningEffort`): Ajusta el nivel de pensamiento interno en modelos de la serie o (o1, o3). Acepta `"low"`, `"medium"` o `"high"`. Reducirlo disminuye la latencia y el consumo de tokens.
+- **`N`** (`param.Opt[int64]`): Número de alternativas de respuesta a generar para la misma petición. El costo se multiplica por la cantidad de respuestas generadas.
+- **`Stop`** (`ChatCompletionNewParamsStopUnion`): Hasta 4 secuencias de texto que, al ser generadas por el modelo, detienen inmediatamente la emisión de tokens.
+
+#### Penalizaciones y Probabilidades
+
+- **`FrequencyPenalty`** (`param.Opt[float64]`): Penalización entre -2.0 y 2.0 basada en la frecuencia con la que un token ya ha aparecido en el texto. Valores positivos reducen la repetición exacta de palabras.
+- **`PresencePenalty`** (`param.Opt[float64]`): Penalización entre -2.0 y 2.0 basada en la presencia de un token en el texto. Valores positivos incentivan al modelo a introducir nuevos temas.
+- **`LogitBias`** (`map[string]int64`): Modifica directamente la probabilidad de emisión de tokens específicos pasados por su ID numérico (de -100 a 100). Un valor de -100 prohíbe el token; 100 lo fuerza.
+- **`Logprobs`** (`param.Opt[bool]`): Si es `true`, devuelve la probabilidad logarítmica de cada token generado en la respuesta.
+- **`TopLogprobs`** (`param.Opt[int64]`): Integer (0 a 20) que especifica cuántos tokens candidatos alternativos incluir junto a su logprob en cada posición. Requiere `Logprobs: openai.F(true)`.
+
+#### Herramientas, Formatos y Modos
+
+- **`Tools`** (`[]ChatCompletionToolParam`): Lista de herramientas (funciones) disponibles que el modelo puede solicitar ejecutar.
+- **`ToolChoice`** (`ChatCompletionToolChoiceOptionUnionParam`): Controla cómo el modelo usa las herramientas: `"none"`, `"auto"`, `"required"` o forzar una función concreta.
+- **`ParallelToolCalls`** (`param.Opt[bool]`): Define si el modelo puede emitir múltiples llamadas a herramientas simultáneamente en una sola respuesta.
+- **`ResponseFormat`** (`ChatCompletionNewParamsResponseFormatUnion`): Define el formato de salida: Structured Outputs (`json_schema`), modo JSON simple (`json_object`) o texto estándar.
+- **`Modalities`** (`[]string`): Tipos de contenido a generar (`["text"]`, `["text", "audio"]`).
+- **`Audio`** (`ChatCompletionAudioParam`): Configuración requerida (voz y formato) si se especifica la modalidad `"audio"`.
+- **`Prediction`** (`ChatCompletionPredictionContentParam`): Predicted Outputs. Permite pasar un texto existente (por ejemplo, código que se va a refactorizar) para acelerar drásticamente la latencia reusando partes idénticas.
+- **`WebSearchOptions`** (`ChatCompletionNewParamsWebSearchOptions`): Configuración para activar la búsqueda web nativa en los modelos compatibles.
+
+#### Infraestructura, Caching y Rastreo
+
+- **`Store`** (`param.Opt[bool]`): Determina si OpenAI guarda la salida para uso interno en evaluación o destilación de modelos.
+- **`Metadata`** (`shared.Metadata`): Hasta 16 pares clave-valor (strings) para etiquetar o categorizar las llamadas desde el dashboard.
+- **`Seed`** (`param.Opt[int64]`): Semilla numérica para favorecer muestreos deterministas entre peticiones idénticas.
+- **`StreamOptions`** (`ChatCompletionStreamOptionsParam`): Opciones de transmisión SSE, como incluir el conteo final de tokens (`IncludeUsage`) al streamear.
+- **`ServiceTier`** (`ChatCompletionNewParamsServiceTier`): Nivel de procesamiento (`"auto"`, `"default"`, `"flex"`, `"priority"`). `"flex"` utiliza capacidad sobrante a menor costo.
+- **`PromptCacheKey`** (`param.Opt[string]`): Identificador opcional para maximizar la tasa de acierto del Prompt Caching de la API.
+- **`SafetyIdentifier`** (`param.Opt[string]`): Identificador anónimo del usuario final para detección de abusos y cumplimiento de políticas de uso.
+- **`User`** (`param.Opt[string]`): **[Deprecado]** Reemplazado por `SafetyIdentifier` y `PromptCacheKey`.
