@@ -1,11 +1,15 @@
 package examples
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"ia_worker/libs"
 	"log"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -45,30 +49,121 @@ func ChatWitUs(config *libs.Config) {
 		"additionalProperties": false,
 	}
 
-	client.Chat.Completions.NewStreaming(
-		ctx,
-		openai.ChatCompletionNewParams{
-			Model:            config.Cloudflared.Modelo,
-			Temperature:      openai.Float(0.4),
-			FrequencyPenalty: openai.Float(0.5),
-			SafetyIdentifier: openai.String("_htlgil41"),
-			ToolChoice: openai.ChatCompletionToolChoiceOptionParamOfChatCompletionNamedToolChoice(openai.ChatCompletionNamedToolChoiceFunctionParam{
-				Name: "create_client",
-			}),
-			Tools: []openai.ChatCompletionToolParam{
-				{
-					Function: shared.FunctionDefinitionParam{
-						Name:        "create_client",
-						Description: openai.String("Crea un cliente o un usuario con sus habilidades"),
-						Strict:      openai.Bool(true),
-						Parameters:  CrearClienteInformacion,
+	var messages []openai.ChatCompletionMessageParamUnion
+	messages = append(messages, openai.SystemMessage("Eres un asistente servicial capaz de crear clientes utilizando la herramienta disponible."))
+
+	scanner := bufio.NewScanner(os.Stdin)
+	fmt.Println("\n==========================================")
+	fmt.Println(" Chat iniciado. Escribe 'salir' para terminar.")
+	fmt.Println("==========================================\n")
+
+	for {
+		fmt.Println("Usuario ->")
+		if !scanner.Scan() {
+			break
+		}
+
+		userInput := strings.TrimSpace(scanner.Text())
+		if userInput == "" {
+			continue
+		}
+
+		if strings.ToLower(userInput) == "salida" {
+			fmt.Println("Saliendo del chat")
+			time.Sleep(2 * time.Second)
+			break
+		}
+
+		messages = append(messages, openai.UserMessage(userInput))
+		//agente_loop:
+		for {
+			stream := client.Chat.Completions.NewStreaming(ctx, openai.ChatCompletionNewParams{
+				Model:            config.Cloudflared.Modelo,
+				Temperature:      openai.Float(0.4),
+				FrequencyPenalty: openai.Float(0.5),
+				SafetyIdentifier: openai.String("_htlgil41"),
+				ToolChoice: openai.ChatCompletionToolChoiceOptionUnionParam{
+					OfAuto: openai.String("auto"),
+				},
+				Tools: []openai.ChatCompletionToolParam{
+					{
+						Function: shared.FunctionDefinitionParam{
+							Name:        "create_client",
+							Description: openai.String("Crea un cliente o un usuario con sus habilidades"),
+							Strict:      openai.Bool(true),
+							Parameters:  CrearClienteInformacion,
+						},
 					},
 				},
-			},
-			Messages: []openai.ChatCompletionMessageParamUnion{},
-		},
-	)
+				Messages: messages,
+			})
 
+			var fullContent strings.Builder
+			type accumulatedToolCall struct {
+				ID         string
+				Name       string
+				ArgsBuffer strings.Builder
+			}
+			toolCallsMap := make(map[int64]*accumulatedToolCall)
+			fmt.Print("Agente > ")
+
+			for stream.Next() {
+				chunk := stream.Current()
+				if len(chunk.Choices) == 0 {
+					continue
+				}
+
+				delta := chunk.Choices[0].Delta
+				if delta.Content != "" {
+					fmt.Print(delta.Content)
+					fullContent.WriteString(delta.Content)
+				}
+
+				for _, tcDelta := range delta.ToolCalls {
+					idx := tcDelta.Index
+					if _, exists := toolCallsMap[idx]; !exists {
+						toolCallsMap[idx] = &accumulatedToolCall{}
+					}
+					if tcDelta.ID != "" {
+						toolCallsMap[idx].ID = tcDelta.ID
+					}
+					if tcDelta.Function.Name != "" {
+						toolCallsMap[idx].Name = tcDelta.Function.Name
+					}
+					if tcDelta.Function.Arguments != "" {
+						toolCallsMap[idx].ArgsBuffer.WriteString(tcDelta.Function.Arguments)
+					}
+				}
+			}
+
+			if err := stream.Err(); err != nil {
+				log.Printf("\nError procesando stream: %v\n", err)
+				break
+			}
+			fmt.Println()
+			messages = append(messages, openai.AssistantMessage(fullContent.String()))
+			if len(toolCallsMap) == 0 {
+				break
+			}
+
+			for _, tc := range toolCallsMap {
+				if tc.Name == "create_client" {
+					argsJSON := tc.ArgsBuffer.String()
+					fmt.Printf("\n[AGENTE Executing Tool: %s con args: %s]\n", tc.Name, argsJSON)
+
+					resultOutput, errorTools := EjecutarCreateClient(argsJSON)
+					if errorTools != nil {
+						messages = append(messages, openai.ToolMessage(tc.ID, resultOutput))
+						fmt.Printf("[AGENTE Tool Output]: %s\n\n", resultOutput)
+						continue
+					}
+
+					messages = append(messages, openai.ToolMessage(tc.ID, resultOutput))
+					fmt.Printf("[AGENTE Tool Output]: %s\n\n", resultOutput)
+				}
+			}
+		}
+	}
 }
 
 type CreateClientArgs struct {
