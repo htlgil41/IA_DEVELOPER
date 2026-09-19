@@ -35,9 +35,9 @@ func ResponseChatStream(config *libs.Config) {
 	var responesComplete strings.Builder
 	for stream_response.Next() {
 		chuc := stream_response.Current()
-		if len(chuc.Choices) > 0 {
-			responesComplete.WriteString(chuc.Choices[0].Delta.Content)
-			fmt.Print(chuc.Choices[0].Delta.Content)
+		for _, choice := range chuc.Choices {
+			responesComplete.WriteString(choice.Delta.Content)
+			fmt.Print(choice.Delta.Content)
 			os.Stdout.Sync()
 		}
 	}
