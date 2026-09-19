@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"ia_worker/examples"
 	"ia_worker/libs"
 	"log"
 )
@@ -16,4 +17,5 @@ func main() {
 
 	// examples.ResponseChat(config)
 	// examples.ResponseChatStream(config)
+	examples.ChatWitUs(config)
 }
