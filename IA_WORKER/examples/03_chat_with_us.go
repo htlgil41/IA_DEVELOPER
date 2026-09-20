@@ -97,9 +97,6 @@ func ChatWitUs(config *libs.Config) {
 				Temperature:      openai.Float(0.4),
 				FrequencyPenalty: openai.Float(0.1),
 				SafetyIdentifier: openai.String("_htlgil41"),
-				ToolChoice: openai.ChatCompletionToolChoiceOptionUnionParam{
-					OfAuto: openai.String("auto"),
-				},
 				Tools: []openai.ChatCompletionToolParam{
 					{
 						Function: shared.FunctionDefinitionParam{
