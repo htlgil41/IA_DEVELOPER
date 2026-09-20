@@ -33,7 +33,6 @@ const (
 
 func ChatWitUs(config *libs.Config) {
 	log.Println("Chat with us for CMD/STDIn")
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -153,7 +152,7 @@ func ChatWitUs(config *libs.Config) {
 			}
 
 			if err := stream.Err(); err != nil {
-				log.Printf("\nError procesando stream: %v\n", err)
+				log.Printf("\nError procesando stream: %v\n", err.Error())
 				break
 			}
 			fmt.Println()
@@ -207,7 +206,6 @@ func ChatWitUs(config *libs.Config) {
 					log.Printf("[AGENTE] error ejecutando tool: %v", errorTools)
 				}
 
-				messages = append(messages, openai.ToolMessage(tc.ID, resultOutput))
 				fmt.Printf("[AGENTE Tool Output]: %s\n\n", resultOutput)
 			}
 		}
